@@ -1,0 +1,380 @@
+#include <Wire.h>
+
+// ---------------- PIN CONFIGURATION ----------------
+const byte IR1_PIN = 2;
+const byte IR2_PIN = 3;
+const byte RESET_PIN = 4;
+const byte BUZZER_PIN = 5;
+const byte RELAY_PIN = 6;
+
+// ---------------- LCD ----------------
+const byte LCD_ADDRESS = 0x27;
+
+// PCF8574 pins
+const byte LCD_RS = 0;
+const byte LCD_EN = 2;
+const byte LCD_BACKLIGHT = 3;
+
+// ---------------- RELAY ----------------
+const byte RELAY_ON = LOW;
+const byte RELAY_OFF = HIGH;
+
+// ---------------- IR SENSOR ----------------
+const byte SENSOR_ACTIVE = LOW;
+
+// ---------------- STUDENT COUNT ----------------
+int studentCount = 0;
+
+// ---------------- SENSOR STATES ----------------
+enum State {
+  WAITING,
+  ENTRY_WAIT,
+  EXIT_WAIT,
+  WAIT_CLEAR
+};
+
+State state = WAITING;
+
+unsigned long sequenceStartTime = 0;
+const unsigned long SEQUENCE_TIMEOUT = 2000;
+
+bool lastResetState = HIGH;
+
+
+// ==================================================
+// LCD LOW LEVEL FUNCTIONS
+// ==================================================
+
+void lcdWrite(byte data) {
+  Wire.beginTransmission(LCD_ADDRESS);
+  Wire.write(data);
+  Wire.endTransmission();
+}
+
+void lcdPulseEnable(byte data) {
+
+  lcdWrite(data | (1 << LCD_EN));
+
+  delayMicroseconds(1);
+
+  lcdWrite(data & ~(1 << LCD_EN));
+
+  delayMicroseconds(50);
+}
+
+void lcdSend(byte value, byte mode) {
+
+  byte highNibble = value & 0xF0;
+  byte lowNibble = (value << 4) & 0xF0;
+
+  byte data;
+
+  data = highNibble;
+
+  if (mode) {
+    data |= (1 << LCD_RS);
+  }
+
+  data |= (1 << LCD_BACKLIGHT);
+
+  lcdPulseEnable(data);
+
+  data = lowNibble;
+
+  if (mode) {
+    data |= (1 << LCD_RS);
+  }
+
+  data |= (1 << LCD_BACKLIGHT);
+
+  lcdPulseEnable(data);
+}
+
+void lcdCommand(byte command) {
+  lcdSend(command, 0);
+}
+
+void lcdCharacter(char character) {
+  lcdSend(character, 1);
+}
+
+void lcdPrint(const char *text) {
+
+  while (*text) {
+    lcdCharacter(*text);
+    text++;
+  }
+}
+
+void lcdClear() {
+
+  lcdCommand(0x01);
+
+  delay(2);
+}
+
+void lcdSetCursor(byte column, byte row) {
+
+  byte address;
+
+  if (row == 0) {
+    address = 0x80 + column;
+  }
+  else {
+    address = 0xC0 + column;
+  }
+
+  lcdCommand(address);
+}
+
+void lcdInit() {
+
+  delay(50);
+
+  byte data = (1 << LCD_BACKLIGHT);
+
+  Wire.beginTransmission(LCD_ADDRESS);
+  Wire.write(data);
+  Wire.endTransmission();
+
+  delay(100);
+
+  // 4-bit initialization
+  lcdCommand(0x33);
+  lcdCommand(0x32);
+  lcdCommand(0x28);
+  lcdCommand(0x0C);
+  lcdCommand(0x06);
+  lcdCommand(0x01);
+
+  delay(5);
+}
+
+
+// ==================================================
+// LCD DISPLAY
+// ==================================================
+
+void updateLCD() {
+
+  lcdClear();
+
+  lcdSetCursor(0, 0);
+
+  lcdPrint("Students: ");
+
+  if (studentCount < 10) {
+    lcdCharacter('0');
+  }
+
+  if (studentCount < 100) {
+    lcdCharacter('0');
+  }
+
+  // Print number
+  if (studentCount >= 100) {
+    lcdCharacter('0' + (studentCount / 100) % 10);
+  }
+
+  lcdCharacter('0' + (studentCount / 10) % 10);
+  lcdCharacter('0' + studentCount % 10);
+
+  lcdSetCursor(0, 1);
+
+  if (studentCount > 0) {
+    lcdPrint("Light + Fan:ON");
+  }
+  else {
+    lcdPrint("Light + Fan:OFF");
+  }
+}
+
+
+// ==================================================
+// SYSTEM UPDATE
+// ==================================================
+
+void updateSystem() {
+
+  if (studentCount > 0) {
+    digitalWrite(RELAY_PIN, RELAY_ON);
+  }
+  else {
+    digitalWrite(RELAY_PIN, RELAY_OFF);
+  }
+
+  updateLCD();
+}
+
+
+// ==================================================
+// BUZZER
+// ==================================================
+
+void beep() {
+
+  tone(BUZZER_PIN, 2000);
+
+  delay(150);
+
+  noTone(BUZZER_PIN);
+}
+
+
+// ==================================================
+// SETUP
+// ==================================================
+
+void setup() {
+
+  pinMode(IR1_PIN, INPUT);
+  pinMode(IR2_PIN, INPUT);
+
+  pinMode(RESET_PIN, INPUT);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  pinMode(RELAY_PIN, OUTPUT);
+
+  digitalWrite(RELAY_PIN, RELAY_OFF);
+
+  digitalWrite(BUZZER_PIN, LOW);
+
+  Wire.begin();
+
+  lcdInit();
+
+  updateSystem();
+
+  delay(1000);
+}
+
+
+// ==================================================
+// MAIN LOOP
+// ==================================================
+
+void loop() {
+
+  // ---------------- RESET BUTTON ----------------
+
+  bool resetState = digitalRead(RESET_PIN);
+
+  if (lastResetState == HIGH && resetState == LOW) {
+
+    studentCount = 0;
+
+    state = WAITING;
+
+    digitalWrite(RELAY_PIN, RELAY_OFF);
+
+    beep();
+
+    updateSystem();
+
+    delay(250);
+  }
+
+  lastResetState = resetState;
+
+
+  // ---------------- SENSOR READING ----------------
+
+  bool ir1 = (digitalRead(IR1_PIN) == SENSOR_ACTIVE);
+
+  bool ir2 = (digitalRead(IR2_PIN) == SENSOR_ACTIVE);
+
+
+  // ==================================================
+  // WAITING
+  // ==================================================
+
+  if (state == WAITING) {
+
+    // IR1 first = ENTRY
+    if (ir1 && !ir2) {
+
+      state = ENTRY_WAIT;
+
+      sequenceStartTime = millis();
+    }
+
+    // IR2 first = EXIT
+    else if (ir2 && !ir1) {
+
+      state = EXIT_WAIT;
+
+      sequenceStartTime = millis();
+    }
+
+    // Both detected
+    else if (ir1 && ir2) {
+
+      state = WAIT_CLEAR;
+    }
+  }
+
+
+  // ==================================================
+  // ENTRY: IR1 -> IR2
+  // ==================================================
+
+  else if (state == ENTRY_WAIT) {
+
+    if (ir2) {
+
+      studentCount++;
+
+      beep();
+
+      updateSystem();
+
+      state = WAIT_CLEAR;
+    }
+
+    else if (millis() - sequenceStartTime > SEQUENCE_TIMEOUT) {
+
+      state = WAITING;
+    }
+  }
+
+
+  // ==================================================
+  // EXIT: IR2 -> IR1
+  // ==================================================
+
+  else if (state == EXIT_WAIT) {
+
+    if (ir1) {
+
+      if (studentCount > 0) {
+
+        studentCount--;
+      }
+
+      beep();
+
+      updateSystem();
+
+      state = WAIT_CLEAR;
+    }
+
+    else if (millis() - sequenceStartTime > SEQUENCE_TIMEOUT) {
+
+      state = WAITING;
+    }
+  }
+
+
+  // ==================================================
+  // WAIT FOR BOTH SENSORS TO CLEAR
+  // ==================================================
+
+  else if (state == WAIT_CLEAR) {
+
+    if (!ir1 && !ir2) {
+
+      state = WAITING;
+    }
+  }
+}
