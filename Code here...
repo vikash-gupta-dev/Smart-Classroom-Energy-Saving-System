@@ -1,5 +1,4 @@
 #include <Wire.h>
-
 // ---------------- PIN CONFIGURATION ----------------
 const byte IR1_PIN = 2;
 const byte IR2_PIN = 3;
