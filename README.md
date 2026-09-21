@@ -27,14 +27,15 @@ Working
 6. The LCD displays the student count and device status.
 7. The buzzer gives an alert during entry, exit, and reset.
 
-Pin Configuration
+## Pin Configuration
 
-Component| Arduino Pin
-IR Sensor 1| D2
-IR Sensor 2| D3
-Reset Button| D4
-Buzzer| D5
-Relay Module| D6
+| Component | Arduino Pin |
+|---|---|
+| IR Sensor 1 | D2 |
+| IR Sensor 2 | D3 |
+| Reset Button | D4 |
+| Buzzer | D5 |
+| Relay Module | D6 |
 
 Code
 
